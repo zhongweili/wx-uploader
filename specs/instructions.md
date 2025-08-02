@@ -1,0 +1,3 @@
+# Instructions
+
+@agent-rust-backend-expert please help me build a simple tool to upload markdown to wechart public account using wechat_pub_rs crate (already added). You shall go through given path or file, if their frontmatter is not published: true, you shall upload the file. e.g. `wx-uploader .` shall search all md files under current dir as long as its status is not published: true, you shall upload. user can also do `wx-uploader ./2025/08/01-chat-with-ai.md`. This will force upload regardless publish status. Once a file is uploaded, you shall change the frontmatter with `published: draft`.
