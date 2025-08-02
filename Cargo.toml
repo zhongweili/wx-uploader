@@ -1,6 +1,6 @@
 [package]
 name = "wx-uploader"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["tyr.chen@gmail.com"]
 license = "MIT"
@@ -15,6 +15,7 @@ keywords = ["wechat", "weixin", "official-account", "uploader"]
 [dependencies]
 anyhow = "1"
 clap = "4"
+colored = "3"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"

@@ -45,6 +45,7 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use colored::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -64,6 +65,10 @@ struct Args {
     /// If a directory is provided, all markdown files will be processed recursively,
     /// but already published files (where `published: "true"`) will be skipped.
     path: PathBuf,
+
+    /// Enable verbose logging with detailed tracing information
+    #[arg(short, long)]
+    verbose: bool,
 }
 
 /// YAML frontmatter structure for markdown files.
@@ -107,8 +112,8 @@ struct Frontmatter {
 /// Main entry point for the WeChat uploader application.
 ///
 /// This function:
-/// 1. Initializes logging with tracing
-/// 2. Parses command line arguments
+/// 1. Parses command line arguments
+/// 2. Initializes logging conditionally based on verbose flag
 /// 3. Reads WeChat API credentials from environment variables
 /// 4. Creates a WeChat client
 /// 5. Processes the input path (file or directory)
@@ -117,6 +122,10 @@ struct Frontmatter {
 ///
 /// - `WECHAT_APP_ID`: WeChat application ID
 /// - `WECHAT_APP_SECRET`: WeChat application secret
+///
+/// # Command Line Options
+///
+/// - `-v, --verbose`: Enable detailed tracing logs
 ///
 /// # Errors
 ///
@@ -127,9 +136,12 @@ struct Frontmatter {
 /// - The provided path is neither a file nor a directory
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
-
     let args = Args::parse();
+
+    // Initialize logging based on verbose flag
+    if args.verbose {
+        tracing_subscriber::fmt::init();
+    }
 
     // WeChatClient needs app_id and app_secret from environment variables
     let app_id =
@@ -141,10 +153,10 @@ async fn main() -> Result<()> {
 
     if args.path.is_file() {
         // Force upload single file
-        upload_file(&client, &args.path, true).await?;
+        upload_file(&client, &args.path, true, args.verbose).await?;
     } else if args.path.is_dir() {
         // Process directory
-        process_directory(&client, &args.path).await?;
+        process_directory(&client, &args.path, args.verbose).await?;
     } else {
         anyhow::bail!("Path must be a file or directory");
     }
@@ -162,6 +174,7 @@ async fn main() -> Result<()> {
 ///
 /// * `client` - WeChat client for API communication
 /// * `dir` - Directory path to process recursively
+/// * `verbose` - Whether to enable detailed tracing logs
 ///
 /// # Errors
 ///
@@ -176,17 +189,17 @@ async fn main() -> Result<()> {
 /// # use std::path::Path;
 /// # async {
 /// let client = WeChatClient::new("app_id".to_string(), "secret".to_string()).await?;
-/// process_directory(&client, Path::new("./articles")).await?;
+/// process_directory(&client, Path::new("./articles"), false).await?;
 /// # Ok::<(), anyhow::Error>(())
 /// # };
 /// ```
-async fn process_directory(client: &WeChatClient, dir: &Path) -> Result<()> {
+async fn process_directory(client: &WeChatClient, dir: &Path, verbose: bool) -> Result<()> {
     for entry in WalkDir::new(dir)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("md"))
     {
-        upload_file(client, entry.path(), false).await?;
+        upload_file(client, entry.path(), false, verbose).await?;
     }
     Ok(())
 }
@@ -205,12 +218,14 @@ async fn process_directory(client: &WeChatClient, dir: &Path) -> Result<()> {
 /// * `client` - WeChat client for API communication
 /// * `path` - Path to the markdown file
 /// * `force` - If true, uploads regardless of published status
+/// * `verbose` - Whether to enable detailed tracing logs
 ///
 /// # Behavior
 ///
 /// - If `force` is false and the file has `published: "true"`, it will be skipped
 /// - After successful upload, the frontmatter is updated with `published: "draft"`
 /// - The original file is modified to reflect the new status
+/// - Output format depends on verbose flag: clean user-friendly messages or detailed logs
 ///
 /// # Errors
 ///
@@ -228,15 +243,15 @@ async fn process_directory(client: &WeChatClient, dir: &Path) -> Result<()> {
 /// # async {
 /// let client = WeChatClient::new("app_id".to_string(), "secret".to_string()).await?;
 ///
-/// // Force upload regardless of status
-/// upload_file(&client, Path::new("article.md"), true).await?;
+/// // Force upload regardless of status with clean output
+/// upload_file(&client, Path::new("article.md"), true, false).await?;
 ///
-/// // Upload only if not already published
-/// upload_file(&client, Path::new("article.md"), false).await?;
+/// // Upload only if not already published with verbose logging
+/// upload_file(&client, Path::new("article.md"), false, true).await?;
 /// # Ok::<(), anyhow::Error>(())
 /// # };
 /// ```
-async fn upload_file(client: &WeChatClient, path: &Path, force: bool) -> Result<()> {
+async fn upload_file(client: &WeChatClient, path: &Path, force: bool, verbose: bool) -> Result<()> {
     // Read and parse the markdown file
     let content = tokio::fs::read_to_string(path)
         .await
@@ -248,18 +263,43 @@ async fn upload_file(client: &WeChatClient, path: &Path, force: bool) -> Result<
     if !force {
         if let Some(published) = &frontmatter.published {
             if published == "true" {
-                tracing::info!("Skipping already published file: {}", path.display());
+                if verbose {
+                    tracing::info!("Skipping already published file: {}", path.display());
+                } else {
+                    println!(
+                        "{} {}",
+                        "⏭".bright_yellow(),
+                        format!("skipped: {}", path.display()).dimmed()
+                    );
+                }
                 return Ok(());
             }
         }
     }
 
     // Upload to WeChat using original file path to preserve relative image paths
-    tracing::info!("Uploading file: {}", path.display());
+    if verbose {
+        tracing::info!("Uploading file: {}", path.display());
+    } else {
+        println!(
+            "{} {}",
+            "🔄".bright_blue(),
+            format!("uploading: {}", path.display()).bright_white()
+        );
+    }
 
     match client.upload(path.to_str().unwrap()).await {
         Ok(draft_id) => {
-            tracing::info!("Successfully uploaded with draft ID: {}", draft_id);
+            if verbose {
+                tracing::info!("Successfully uploaded with draft ID: {}", draft_id);
+            } else {
+                println!(
+                    "{} {} {}",
+                    "✓".bright_green(),
+                    "uploaded:".green(),
+                    path.display()
+                );
+            }
 
             // Update frontmatter with published status
             frontmatter.published = Some("draft".to_string());
@@ -269,10 +309,22 @@ async fn upload_file(client: &WeChatClient, path: &Path, force: bool) -> Result<
                 .await
                 .with_context(|| format!("Failed to update file: {}", path.display()))?;
 
-            tracing::info!("Updated frontmatter in: {}", path.display());
+            if verbose {
+                tracing::info!("Updated frontmatter in: {}", path.display());
+            }
         }
         Err(e) => {
-            tracing::error!("Failed to upload {}: {}", path.display(), e);
+            if verbose {
+                tracing::error!("Failed to upload {}: {}", path.display(), e);
+            } else {
+                println!(
+                    "{} {} {}",
+                    "✗".bright_red(),
+                    "failed:".red(),
+                    path.display()
+                );
+                eprintln!("{} {}", "Error:".bright_red(), e);
+            }
             return Err(e).context("Upload failed");
         }
     }
