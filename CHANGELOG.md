@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.1] - 2025-08-03
+
+### 🐛 Bug Fixes
+
+- Help message could be better
+- Help message could be better
+- Help message could be better
+
 ## [0.4.0] - 2025-08-03
 
 ### 🚀 Features
