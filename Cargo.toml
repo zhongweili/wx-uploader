@@ -14,7 +14,7 @@ keywords = ["wechat", "weixin", "official-account", "uploader"]
 
 [dependencies]
 anyhow = "1"
-clap = "4"
+clap = { version = "4", features = ["derive", "color", "help"] }
 colored = "3"
 regex = "1"
 serde = { version = "1", features = ["derive"] }

@@ -57,7 +57,12 @@ use wechat_pub_rs::WeChatClient;
     author,
     version,
     about = "A tool to upload articles to WeChat Official Account",
-    after_help = "REQUIREMENTS: Set WECHAT_APP_ID and WECHAT_APP_SECRET environment variables\n\nTHEMING: Supports 8 themes and 10 code highlighters via frontmatter:\n  ---\n  title: \"My Article\"\n  theme: \"lapis\"        # Themes: default, lapis, maize, orangeheart, phycat, pie, purple, rainbow\n  code: \"github\"        # Highlighters: github, github-dark, vscode, atom-one-light, atom-one-dark, solarized-light, solarized-dark, monokai, dracula, xcode\n  published: \"draft\"\n  ---\n\nEXAMPLES:\n  wx-uploader article.md      # Upload single file (force)\n  wx-uploader ./articles/     # Process directory (skip published)\n  wx-uploader -v ./blog/      # Verbose logging"
+    after_help = "REQUIREMENTS: Set WECHAT_APP_ID and WECHAT_APP_SECRET environment variables\n\nTHEMING: Supports 8 themes and 10 code highlighters via frontmatter:\n  ---\n  title: \"My Article\"\n  theme: \"lapis\"        # Themes: default, lapis, maize, orangeheart, phycat, pie, purple, rainbow\n  code: \"github\"        # Highlighters: github, github-dark, vscode, atom-one-light, atom-one-dark, solarized-light, solarized-dark, monokai, dracula, xcode\n  published: \"draft\"\n  ---\n\nEXAMPLES:\n  wx-uploader article.md      # Upload single file (force)\n  wx-uploader ./articles/     # Process directory (skip published)\n  wx-uploader -v ./blog/      # Verbose logging",
+    styles = clap::builder::Styles::styled()
+        .header(clap::builder::styling::AnsiColor::BrightYellow.on_default() | clap::builder::styling::Effects::BOLD)
+        .usage(clap::builder::styling::AnsiColor::BrightGreen.on_default() | clap::builder::styling::Effects::BOLD)
+        .literal(clap::builder::styling::AnsiColor::BrightCyan.on_default())
+        .placeholder(clap::builder::styling::AnsiColor::BrightMagenta.on_default())
 )]
 struct Args {
     #[arg(
@@ -111,6 +116,100 @@ struct Frontmatter {
     other: serde_yaml::Value,
 }
 
+// Print help message with colors
+fn print_colored_help() {
+    println!(
+        "{}",
+        "A tool to upload articles to WeChat Official Account"
+            .bright_white()
+            .bold()
+    );
+    println!();
+    println!(
+        "{}: {} [OPTIONS] <PATH>",
+        "Usage".bright_green().bold(),
+        "wx-uploader".bright_cyan()
+    );
+    println!();
+    println!("{}", "Arguments:".bright_yellow().bold());
+    println!(
+        "  {}  Path to markdown file or directory to upload. Files uploaded regardless of status.",
+        "<PATH>".bright_cyan()
+    );
+    println!(
+        "          Directories skip published files. Set theme and code highlighter in frontmatter - see help"
+    );
+    println!("          for complete lists.");
+    println!();
+    println!("{}", "Options:".bright_yellow().bold());
+    println!(
+        "  {}, {}  Enable verbose logging with detailed tracing information",
+        "-v".bright_cyan(),
+        "--verbose".bright_cyan()
+    );
+    println!(
+        "  {}, {}     Print help",
+        "-h".bright_cyan(),
+        "--help".bright_cyan()
+    );
+    println!(
+        "  {}, {}  Print version",
+        "-V".bright_cyan(),
+        "--version".bright_cyan()
+    );
+    println!();
+    println!(
+        "{}: Set {} and {} environment variables",
+        "REQUIREMENTS".bright_red().bold(),
+        "WECHAT_APP_ID".bright_cyan(),
+        "WECHAT_APP_SECRET".bright_cyan()
+    );
+    println!();
+    println!(
+        "{}: Supports {} themes and {} code highlighters via frontmatter:",
+        "THEMING".bright_green().bold(),
+        "8".bright_white().bold(),
+        "10".bright_white().bold()
+    );
+    println!("  {}", "---".bright_black());
+    println!("  {}: \"My Article\"", "title".bright_cyan());
+    println!(
+        "  {}: \"lapis\"        {} Themes: {}",
+        "theme".bright_cyan(),
+        "#".bright_black(),
+        "default, lapis, maize, orangeheart, phycat, pie, purple, rainbow".bright_white()
+    );
+    println!(
+        "  {}: \"github\"        {} Highlighters: {}",
+        "code".bright_cyan(),
+        "#".bright_black(),
+        "github, github-dark, vscode, atom-one-light, atom-one-dark,".bright_white()
+    );
+    println!(
+        "                        {}",
+        "solarized-light, solarized-dark, monokai, dracula, xcode".bright_white()
+    );
+    println!("  {}: \"draft\"", "published".bright_cyan());
+    println!("  {}", "---".bright_black());
+    println!();
+    println!("{}", "EXAMPLES:".bright_blue().bold());
+    println!(
+        "  {}      {} Upload single file (force)",
+        "wx-uploader article.md".bright_white().bold(),
+        "#".bright_black()
+    );
+    println!(
+        "  {}     {} Process directory (skip published)",
+        "wx-uploader ./articles/".bright_white().bold(),
+        "#".bright_black()
+    );
+    println!(
+        "  {}      {} Verbose logging",
+        "wx-uploader -v ./blog/".bright_white().bold(),
+        "#".bright_black()
+    );
+}
+
 /// Main entry point for the WeChat uploader application.
 ///
 /// This function:
@@ -136,8 +235,15 @@ struct Frontmatter {
 /// - WeChat client initialization fails
 /// - File/directory processing fails
 /// - The provided path is neither a file nor a directory
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Check if help flag is present before parsing args
+    if std::env::args().any(|arg| arg == "--help" || arg == "-h") {
+        print_colored_help();
+        std::process::exit(0);
+    }
+
     let args = Args::parse();
 
     // Initialize logging based on verbose flag
