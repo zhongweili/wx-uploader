@@ -1,7 +1,7 @@
 //! OpenAI integration for cover image generation
 //!
 //! This module provides OpenAI API integration for generating article cover images
-//! using GPT-4 for scene descriptions and DALL-E 3 for image generation.
+//! using GPT-5-mini for scene descriptions and gpt-image-1 for image generation.
 
 use crate::error::{Error, Result};
 use reqwest::Client;
@@ -194,7 +194,7 @@ impl OpenAIClient {
 impl SceneDescriptionGenerator for OpenAIClient {
     async fn generate_scene_description(&self, content: &str) -> Result<String> {
         let request_body = json!({
-            "model": "gpt-4-turbo-preview",
+            "model": "gpt-5-mini",
             "messages": [
                 {
                     "role": "system",
@@ -234,9 +234,9 @@ impl PromptBuilder for OpenAIClient {
 impl ImageGenerator for OpenAIClient {
     async fn generate_image(&self, prompt: &str) -> Result<String> {
         let request_body = json!({
-            "model": "dall-e-3",
+            "model": "gpt-image-1",
             "prompt": prompt,
-            "size": "1792x1024",  // 16:9 aspect ratio, supported by DALL-E 3
+            "size": "1792x1024",  // 16:9 aspect ratio
             "quality": "standard",
             "response_format": "url",
             "n": 1
