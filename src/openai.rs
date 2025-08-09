@@ -195,7 +195,6 @@ impl OpenAIClient {
         let image_url = match self.generate_image(&dalle_prompt).await {
             Ok(url) => {
                 info!("Successfully generated image URL: {}", url);
-                println!("  {} Image URL generated successfully", "✓".bright_green());
                 url
             }
             Err(e) => {
@@ -281,13 +280,6 @@ impl SceneDescriptionGenerator for OpenAIClient {
 
         let response_json = self.post_request("chat/completions", request_body).await?;
 
-        // Debug: Log the entire response
-        eprintln!(
-            "  🔍 GPT Response: {}",
-            serde_json::to_string_pretty(&response_json)
-                .unwrap_or_else(|_| "Unable to format".to_string())
-        );
-
         let mut scene_description = response_json["choices"][0]["message"]["content"]
             .as_str()
             .unwrap_or("")
@@ -295,10 +287,7 @@ impl SceneDescriptionGenerator for OpenAIClient {
             .to_string();
 
         if scene_description.is_empty() {
-            eprintln!("  ⚠ Warning: Scene description is still empty! Using default.");
             scene_description = "A serene landscape with rolling hills under a soft, dreamy sky filled with gentle clouds. The scene evokes a sense of peaceful contemplation and infinite possibilities.".to_string();
-        } else {
-            eprintln!("  ✓ Scene description: {}", scene_description);
         }
 
         Ok(scene_description)
@@ -322,6 +311,8 @@ impl ImageGenerator for OpenAIClient {
             "prompt": prompt,
             "size": "1536x1024",  // Close to 16:9 aspect ratio
             "quality": "high",
+            "output_format": "jpeg",
+            "output_compression": 80,
             "n": 1
         });
 
@@ -329,18 +320,11 @@ impl ImageGenerator for OpenAIClient {
             .post_request("images/generations", request_body)
             .await?;
 
-        // Debug: Log response structure (but not the full base64 data)
-        eprintln!(
-            "  🔍 Image API Response received with {} key(s)",
-            response_json.as_object().map(|o| o.len()).unwrap_or(0)
-        );
-
         // Extract base64 data from response
         let base64_data = if let Some(b64) = response_json["data"][0]["b64_json"].as_str() {
             b64.to_string()
         } else if let Some(url) = response_json["data"][0]["url"].as_str() {
             // If URL is returned instead of base64, return it as-is
-            eprintln!("  ✓ Image URL extracted: {}", url);
             return Ok(url.to_string());
         } else {
             return Err(Error::openai(format!(
@@ -351,11 +335,6 @@ impl ImageGenerator for OpenAIClient {
             )));
         };
 
-        eprintln!(
-            "  ✓ Base64 image data extracted (length: {} bytes)",
-            base64_data.len()
-        );
-
         // Return base64 data prefixed with a marker
         Ok(format!("base64:{}", base64_data))
     }
@@ -364,13 +343,9 @@ impl ImageGenerator for OpenAIClient {
         // Check if this is base64 data or a URL
         let image_bytes = if let Some(base64_str) = url.strip_prefix("base64:") {
             // Decode base64 data
-            // Use base64 crate to decode
-            let decoded = base64::engine::general_purpose::STANDARD
+            base64::engine::general_purpose::STANDARD
                 .decode(base64_str)
-                .map_err(|e| Error::openai(format!("Failed to decode base64 image: {}", e)))?;
-
-            eprintln!("  ✓ Decoded base64 image ({} bytes)", decoded.len());
-            decoded
+                .map_err(|e| Error::openai(format!("Failed to decode base64 image: {}", e)))?
         } else {
             // Download from URL
             let response = self.http_client.get(url).send().await?;
@@ -383,7 +358,6 @@ impl ImageGenerator for OpenAIClient {
             }
 
             let bytes = response.bytes().await?;
-            eprintln!("  ✓ Downloaded image from URL ({} bytes)", bytes.len());
             bytes.to_vec()
         };
 
