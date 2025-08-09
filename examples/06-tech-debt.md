@@ -2,9 +2,9 @@
 title: AI 时代的技术债重新定义：从代码到意图的三重债务
 published: draft
 cover: images/06-cover.png
+theme: lapis
 description: 当AI成为代码的主要生产者，技术债的本质从"代码写得好不好"转向"想得好不好"。我们需要建立从规约到洞察的进化闭环，成为意图的精确表达者和系统行为的策展人。
 author: 陈小天
-theme: lapis
 ---
 
 > 知止而后有定，定而后能静，静而后能安，安而后能虑，虑而后能得。

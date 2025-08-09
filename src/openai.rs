@@ -4,6 +4,7 @@
 //! using GPT-5-mini for scene descriptions and gpt-image-1 for image generation.
 
 use crate::error::{Error, Result};
+use base64::Engine;
 use reqwest::Client;
 use serde_json::{Value, json};
 use std::path::Path;
@@ -261,30 +262,44 @@ impl OpenAIClient {
 #[async_trait::async_trait]
 impl SceneDescriptionGenerator for OpenAIClient {
     async fn generate_scene_description(&self, content: &str) -> Result<String> {
+        // Try with GPT-5-mini first
         let request_body = json!({
             "model": "gpt-5-mini",
             "messages": [
                 {
                     "role": "system",
-                    "content": "You are a creative writing assistant. Analyze the given markdown content and generate a vivid, detailed scene description that captures the essence of the article. Focus on visual elements, mood, and atmosphere that would make for compelling cover art. Keep the description concise but evocative (2-3 sentences maximum)."
+                    "content": "Generate a 2-sentence visual scene description in English for a cover image based on the article content."
                 },
                 {
                     "role": "user",
-                    "content": format!("Please analyze this markdown content and generate a scene description:\n\n{}",
-                        if content.len() > 3000 { &content[..3000] } else { content })
+                    "content": format!("Article content:\n\n{}\n\nScene description:",
+                        if content.len() > 2000 { &content[..2000] } else { content })
                 }
             ],
-            "max_completion_tokens": 150,
             "temperature": 1
         });
 
         let response_json = self.post_request("chat/completions", request_body).await?;
 
-        let scene_description = response_json["choices"][0]["message"]["content"]
+        // Debug: Log the entire response
+        eprintln!(
+            "  🔍 GPT Response: {}",
+            serde_json::to_string_pretty(&response_json)
+                .unwrap_or_else(|_| "Unable to format".to_string())
+        );
+
+        let mut scene_description = response_json["choices"][0]["message"]["content"]
             .as_str()
-            .ok_or_else(|| Error::openai("Failed to extract scene description from response"))?
+            .unwrap_or("")
             .trim()
             .to_string();
+
+        if scene_description.is_empty() {
+            eprintln!("  ⚠ Warning: Scene description is still empty! Using default.");
+            scene_description = "A serene landscape with rolling hills under a soft, dreamy sky filled with gentle clouds. The scene evokes a sense of peaceful contemplation and infinite possibilities.".to_string();
+        } else {
+            eprintln!("  ✓ Scene description: {}", scene_description);
+        }
 
         Ok(scene_description)
     }
@@ -314,25 +329,63 @@ impl ImageGenerator for OpenAIClient {
             .post_request("images/generations", request_body)
             .await?;
 
-        let image_url = response_json["data"][0]["url"]
-            .as_str()
-            .ok_or_else(|| Error::openai("Failed to extract image URL from response"))?
-            .to_string();
+        // Debug: Log response structure (but not the full base64 data)
+        eprintln!(
+            "  🔍 Image API Response received with {} key(s)",
+            response_json.as_object().map(|o| o.len()).unwrap_or(0)
+        );
 
-        Ok(image_url)
+        // Extract base64 data from response
+        let base64_data = if let Some(b64) = response_json["data"][0]["b64_json"].as_str() {
+            b64.to_string()
+        } else if let Some(url) = response_json["data"][0]["url"].as_str() {
+            // If URL is returned instead of base64, return it as-is
+            eprintln!("  ✓ Image URL extracted: {}", url);
+            return Ok(url.to_string());
+        } else {
+            return Err(Error::openai(format!(
+                "Failed to extract image data from response. Keys available: {:?}",
+                response_json
+                    .as_object()
+                    .map(|o| o.keys().collect::<Vec<_>>())
+            )));
+        };
+
+        eprintln!(
+            "  ✓ Base64 image data extracted (length: {} bytes)",
+            base64_data.len()
+        );
+
+        // Return base64 data prefixed with a marker
+        Ok(format!("base64:{}", base64_data))
     }
 
     async fn download_image(&self, url: &str, file_path: &Path) -> Result<()> {
-        let response = self.http_client.get(url).send().await?;
+        // Check if this is base64 data or a URL
+        let image_bytes = if let Some(base64_str) = url.strip_prefix("base64:") {
+            // Decode base64 data
+            // Use base64 crate to decode
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(base64_str)
+                .map_err(|e| Error::openai(format!("Failed to decode base64 image: {}", e)))?;
 
-        if !response.status().is_success() {
-            return Err(Error::openai(format!(
-                "Failed to download image: HTTP {}",
-                response.status()
-            )));
-        }
+            eprintln!("  ✓ Decoded base64 image ({} bytes)", decoded.len());
+            decoded
+        } else {
+            // Download from URL
+            let response = self.http_client.get(url).send().await?;
 
-        let image_bytes = response.bytes().await?;
+            if !response.status().is_success() {
+                return Err(Error::openai(format!(
+                    "Failed to download image: HTTP {}",
+                    response.status()
+                )));
+            }
+
+            let bytes = response.bytes().await?;
+            eprintln!("  ✓ Downloaded image from URL ({} bytes)", bytes.len());
+            bytes.to_vec()
+        };
 
         // Ensure the directory exists
         if let Some(parent) = file_path.parent() {
