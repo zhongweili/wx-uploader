@@ -11,6 +11,12 @@ export WECHAT_APP_ID="your_app_id"
 export WECHAT_APP_SECRET="your_app_secret"
 ```
 
+For automatic cover image generation using AI:
+
+```bash
+export OPENAI_API_KEY="your_openai_api_key"
+```
+
 ## Installation
 
 ```bash
@@ -41,8 +47,9 @@ wx-uploader ./2025/08/01-chat-with-ai.md
 
 1. The tool scans for markdown files with YAML frontmatter
 2. If a file doesn't have `published: true` in its frontmatter, it will be uploaded
-3. When specifying a single file, it will be uploaded regardless of its publish status
-4. After successful upload, the frontmatter is updated with `published: draft`
+3. If no cover image is specified and OpenAI API key is available, generates a Studio Ghibli-style cover image using GPT-4 and DALL-E
+4. When specifying a single file, it will be uploaded regardless of its publish status
+5. After successful upload, the frontmatter is updated with `published: draft` and the cover filename (if generated)
 
 ## Frontmatter Example
 
@@ -50,10 +57,38 @@ wx-uploader ./2025/08/01-chat-with-ai.md
 ---
 title: My Article Title
 published: draft  # or 'true' to skip upload
+cover: cover.png  # optional, auto-generated if missing and OpenAI key is set
 ---
 
 Your markdown content here...
 ```
+
+## AI Cover Generation
+
+When the `OPENAI_API_KEY` environment variable is set, the tool will automatically generate beautiful cover images for articles that don't have one specified.
+
+### How it works:
+
+1. **Content Analysis**: GPT-4 analyzes your markdown content to create a vivid scene description
+2. **Prompt Generation**: Creates an optimized prompt for DALL-E focusing on Studio Ghibli-style artwork
+3. **Image Generation**: DALL-E generates a 16:9 aspect ratio cover image with dreamy, artistic styling
+4. **Auto-Save**: Downloads and saves the image in the same directory as your markdown file
+5. **Metadata Update**: Updates your frontmatter with the generated cover filename
+
+### Features:
+
+- **Studio Ghibli Style**: Beautiful, hand-drawn animation aesthetic with soft colors and natural elements
+- **Content-Aware**: Scene descriptions are based on your actual article content
+- **Automatic Naming**: Generated files use unique names to prevent conflicts
+- **Graceful Fallback**: Continues normal upload process if image generation fails
+- **Optional**: Works without OpenAI integration - just won't generate covers
+
+### Example Output:
+
+For an article about "Building Rust Applications", the AI might generate a scene like:
+> "A cozy workshop filled with gears and mechanical tools, bathed in warm golden light streaming through tall windows, with a craftsman's hands carefully assembling intricate clockwork mechanisms."
+
+This becomes a beautiful Studio Ghibli-style cover image that visually represents your content.
 
 ## Development
 

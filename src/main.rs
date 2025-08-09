@@ -105,6 +105,11 @@ fn print_colored_help() {
         "WECHAT_APP_ID".bright_cyan(),
         "WECHAT_APP_SECRET".bright_cyan()
     );
+    println!(
+        "{}: Set {} for automatic cover image generation",
+        "OPTIONAL".bright_blue().bold(),
+        "OPENAI_API_KEY".bright_cyan()
+    );
     println!();
     println!(
         "{}: Supports {} themes and {} code highlighters via frontmatter:",
@@ -131,6 +136,11 @@ fn print_colored_help() {
         "solarized-light, solarized-dark, monokai, dracula, xcode".white()
     );
     println!("  {}: \"draft\"", "published".bright_cyan());
+    println!(
+        "  {}: \"cover.png\"     {} Auto-generated if missing with OpenAI",
+        "cover".bright_cyan(),
+        "#".bright_black()
+    );
     println!("  {}", "---".bright_black());
     println!();
     println!("{}", "EXAMPLES:".bright_blue().bold());
@@ -210,10 +220,274 @@ struct Frontmatter {
     #[serde(skip_serializing_if = "Option::is_none")]
     published: Option<String>,
 
+    /// Cover image filename for the article.
+    /// If missing, the system will attempt to generate one using AI.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cover: Option<String>,
+
     /// Captures any additional fields in the frontmatter that are not
     /// explicitly defined in this struct.
     #[serde(flatten)]
     other: serde_yaml::Value,
+}
+
+/// OpenAI API client for generating cover images and scene descriptions
+#[derive(Clone)]
+struct OpenAIClient {
+    api_key: String,
+    http_client: reqwest::Client,
+}
+
+impl OpenAIClient {
+    /// Creates a new OpenAI client with the provided API key
+    fn new(api_key: String) -> Self {
+        Self {
+            api_key,
+            http_client: reqwest::Client::new(),
+        }
+    }
+
+    /// Generates a scene description from markdown content using GPT-4
+    async fn generate_scene_description(&self, content: &str) -> Result<String> {
+        let request_body = serde_json::json!({
+            "model": "gpt-4",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a creative writing assistant. Analyze the given markdown content and generate a vivid, detailed scene description that captures the essence of the article. Focus on visual elements, mood, and atmosphere that would make for compelling cover art. Keep the description concise but evocative (2-3 sentences maximum)."
+                },
+                {
+                    "role": "user",
+                    "content": format!("Please analyze this markdown content and generate a scene description:\n\n{}", content)
+                }
+            ],
+            "max_tokens": 150,
+            "temperature": 0.7
+        });
+
+        let response = self
+            .http_client
+            .post("https://api.openai.com/v1/chat/completions")
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&request_body)
+            .send()
+            .await
+            .context("Failed to send request to OpenAI API")?;
+
+        if !response.status().is_success() {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            anyhow::bail!("OpenAI API request failed: {}", error_text);
+        }
+
+        let response_json: serde_json::Value = response
+            .json()
+            .await
+            .context("Failed to parse OpenAI API response")?;
+
+        let scene_description = response_json["choices"][0]["message"]["content"]
+            .as_str()
+            .context("Failed to extract scene description from OpenAI response")?
+            .trim()
+            .to_string();
+
+        Ok(scene_description)
+    }
+
+    /// Generates a DALL-E prompt for creating a Studio Ghibli-style cover image
+    fn create_dalle_prompt(&self, scene_description: &str) -> String {
+        format!(
+            "Create a wide, Ghibli-style image to represent this scene: {}",
+            scene_description
+        )
+    }
+
+    /// Generates an image using DALL-E based on the provided prompt
+    async fn generate_image(&self, prompt: &str) -> Result<String> {
+        let request_body = serde_json::json!({
+            "model": "dall-e-3",
+            "prompt": prompt,
+            "size": "1792x1024",  // 16:9 aspect ratio
+            "quality": "standard",
+            "response_format": "url",
+            "n": 1
+        });
+
+        let response = self
+            .http_client
+            .post("https://api.openai.com/v1/images/generations")
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&request_body)
+            .send()
+            .await
+            .context("Failed to send image generation request to OpenAI API")?;
+
+        if !response.status().is_success() {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            anyhow::bail!("OpenAI DALL-E API request failed: {}", error_text);
+        }
+
+        let response_json: serde_json::Value = response
+            .json()
+            .await
+            .context("Failed to parse OpenAI DALL-E API response")?;
+
+        let image_url = response_json["data"][0]["url"]
+            .as_str()
+            .context("Failed to extract image URL from OpenAI response")?
+            .to_string();
+
+        Ok(image_url)
+    }
+
+    /// Downloads an image from a URL and saves it to the specified path
+    async fn download_image(&self, url: &str, file_path: &Path) -> Result<()> {
+        let response = self
+            .http_client
+            .get(url)
+            .send()
+            .await
+            .context("Failed to download generated image")?;
+
+        if !response.status().is_success() {
+            anyhow::bail!("Failed to download image: HTTP {}", response.status());
+        }
+
+        let image_bytes = response
+            .bytes()
+            .await
+            .context("Failed to read image bytes")?;
+
+        // Ensure the directory exists
+        if let Some(parent) = file_path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
+        }
+
+        tokio::fs::write(file_path, image_bytes)
+            .await
+            .with_context(|| format!("Failed to save image to: {}", file_path.display()))?;
+
+        Ok(())
+    }
+
+    /// Generates and saves a cover image for the given markdown content
+    async fn generate_cover_image(
+        &self,
+        content: &str,
+        file_path: &Path,
+        base_filename: &str,
+    ) -> Result<String> {
+        // Generate scene description from content
+        let scene_description = self
+            .generate_scene_description(content)
+            .await
+            .context("Failed to generate scene description")?;
+
+        tracing::info!("Generated scene description: {}", scene_description);
+
+        // Create DALL-E prompt
+        let dalle_prompt = self.create_dalle_prompt(&scene_description);
+        tracing::info!("DALL-E prompt: {}", dalle_prompt);
+
+        // Show prompt in console for user visibility
+        println!(
+            "  {} {}",
+            "→".bright_blue(),
+            format!("Image prompt: {}", dalle_prompt).bright_white()
+        );
+
+        // Generate image
+        let image_url = self
+            .generate_image(&dalle_prompt)
+            .await
+            .context("Failed to generate image with DALL-E")?;
+
+        // Create filename for the cover image
+        let cover_filename = format!(
+            "{}_cover_{}.png",
+            base_filename,
+            uuid::Uuid::new_v4().simple()
+        );
+        let cover_path = file_path
+            .parent()
+            .context("Failed to get parent directory")?
+            .join(&cover_filename);
+
+        // Download and save the image
+        self.download_image(&image_url, &cover_path)
+            .await
+            .context("Failed to download and save cover image")?;
+
+        Ok(cover_filename)
+    }
+
+    /// Generates and saves a cover image to a specific path
+    async fn generate_cover_image_to_path(
+        &self,
+        content: &str,
+        _markdown_file_path: &Path,
+        target_cover_path: &Path,
+    ) -> Result<()> {
+        // Generate scene description from content
+        let scene_description = self
+            .generate_scene_description(content)
+            .await
+            .context("Failed to generate scene description")?;
+
+        tracing::info!("Generated scene description: {}", scene_description);
+
+        // Create DALL-E prompt
+        let dalle_prompt = self.create_dalle_prompt(&scene_description);
+        tracing::info!("DALL-E prompt: {}", dalle_prompt);
+
+        // Show prompt in console for user visibility
+        println!(
+            "  {} {}",
+            "→".bright_blue(),
+            format!("Image prompt: {}", dalle_prompt).bright_white()
+        );
+
+        // Generate image
+        let image_url = self
+            .generate_image(&dalle_prompt)
+            .await
+            .context("Failed to generate image with DALL-E")?;
+
+        // Download and save the image to the specified path
+        self.download_image(&image_url, target_cover_path)
+            .await
+            .context("Failed to download and save cover image")?;
+
+        Ok(())
+    }
+}
+
+/// Resolves a cover image path relative to the markdown file and checks if it exists
+fn resolve_and_check_cover_path(
+    markdown_file_path: &Path,
+    cover_filename: &str,
+) -> (PathBuf, bool) {
+    let cover_path = if Path::new(cover_filename).is_absolute() {
+        PathBuf::from(cover_filename)
+    } else {
+        // If cover filename is relative, resolve it relative to the markdown file's directory
+        markdown_file_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(cover_filename)
+    };
+
+    let exists = cover_path.exists();
+    (cover_path, exists)
 }
 
 /// Main entry point for the WeChat uploader application.
@@ -229,6 +503,7 @@ struct Frontmatter {
 ///
 /// - `WECHAT_APP_ID`: WeChat application ID
 /// - `WECHAT_APP_SECRET`: WeChat application secret
+/// - `OPENAI_API_KEY`: OpenAI API key for generating cover images (optional)
 ///
 /// # Command Line Options
 ///
@@ -265,12 +540,22 @@ async fn main() -> Result<()> {
 
     let client = WeChatClient::new(app_id, app_secret).await?;
 
+    // OpenAI client is optional - only create if API key is available
+    let openai_client = std::env::var("OPENAI_API_KEY").ok().map(OpenAIClient::new);
+
     if args.path.is_file() {
         // Force upload single file
-        upload_file(&client, &args.path, true, args.verbose).await?;
+        upload_file(
+            &client,
+            openai_client.as_ref(),
+            &args.path,
+            true,
+            args.verbose,
+        )
+        .await?;
     } else if args.path.is_dir() {
         // Process directory
-        process_directory(&client, &args.path, args.verbose).await?;
+        process_directory(&client, openai_client.as_ref(), &args.path, args.verbose).await?;
     } else {
         anyhow::bail!("Path must be a file or directory");
     }
@@ -287,6 +572,7 @@ async fn main() -> Result<()> {
 /// # Arguments
 ///
 /// * `client` - WeChat client for API communication
+/// * `openai_client` - Optional OpenAI client for cover image generation
 /// * `dir` - Directory path to process recursively
 /// * `verbose` - Whether to enable detailed tracing logs
 ///
@@ -303,17 +589,22 @@ async fn main() -> Result<()> {
 /// # use std::path::Path;
 /// # async {
 /// let client = WeChatClient::new("app_id".to_string(), "secret".to_string()).await?;
-/// process_directory(&client, Path::new("./articles"), false).await?;
+/// process_directory(&client, None, Path::new("./articles"), false).await?;
 /// # Ok::<(), anyhow::Error>(())
 /// # };
 /// ```
-async fn process_directory(client: &WeChatClient, dir: &Path, verbose: bool) -> Result<()> {
+async fn process_directory(
+    client: &WeChatClient,
+    openai_client: Option<&OpenAIClient>,
+    dir: &Path,
+    verbose: bool,
+) -> Result<()> {
     for entry in WalkDir::new(dir)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("md"))
     {
-        upload_file(client, entry.path(), false, verbose).await?;
+        upload_file(client, openai_client, entry.path(), false, verbose).await?;
     }
     Ok(())
 }
@@ -323,13 +614,15 @@ async fn process_directory(client: &WeChatClient, dir: &Path, verbose: bool) -> 
 /// This function handles the complete upload workflow:
 /// 1. Reads and parses the markdown file
 /// 2. Checks publication status (unless forced)
-/// 3. Uploads to WeChat if needed
-/// 4. Updates the frontmatter with draft status
-/// 5. Writes the updated content back to the file
+/// 3. Generates cover image if missing and OpenAI client is available
+/// 4. Uploads to WeChat if needed
+/// 5. Updates the frontmatter with draft status and cover image
+/// 6. Writes the updated content back to the file
 ///
 /// # Arguments
 ///
 /// * `client` - WeChat client for API communication
+/// * `openai_client` - Optional OpenAI client for cover image generation
 /// * `path` - Path to the markdown file
 /// * `force` - If true, uploads regardless of published status
 /// * `verbose` - Whether to enable detailed tracing logs
@@ -337,6 +630,7 @@ async fn process_directory(client: &WeChatClient, dir: &Path, verbose: bool) -> 
 /// # Behavior
 ///
 /// - If `force` is false and the file has `published: "true"`, it will be skipped
+/// - If no cover image is specified and OpenAI client is available, generates one
 /// - After successful upload, the frontmatter is updated with `published: "draft"`
 /// - The original file is modified to reflect the new status
 /// - Output format depends on verbose flag: clean user-friendly messages or detailed logs
@@ -346,6 +640,7 @@ async fn process_directory(client: &WeChatClient, dir: &Path, verbose: bool) -> 
 /// Returns an error if:
 /// - File reading fails
 /// - Markdown parsing fails
+/// - Cover image generation fails (if attempted)
 /// - WeChat upload fails
 /// - File writing fails
 ///
@@ -358,14 +653,20 @@ async fn process_directory(client: &WeChatClient, dir: &Path, verbose: bool) -> 
 /// let client = WeChatClient::new("app_id".to_string(), "secret".to_string()).await?;
 ///
 /// // Force upload regardless of status with clean output
-/// upload_file(&client, Path::new("article.md"), true, false).await?;
+/// upload_file(&client, None, Path::new("article.md"), true, false).await?;
 ///
 /// // Upload only if not already published with verbose logging
-/// upload_file(&client, Path::new("article.md"), false, true).await?;
+/// upload_file(&client, None, Path::new("article.md"), false, true).await?;
 /// # Ok::<(), anyhow::Error>(())
 /// # };
 /// ```
-async fn upload_file(client: &WeChatClient, path: &Path, force: bool, verbose: bool) -> Result<()> {
+async fn upload_file(
+    client: &WeChatClient,
+    openai_client: Option<&OpenAIClient>,
+    path: &Path,
+    force: bool,
+    verbose: bool,
+) -> Result<()> {
     // Read and parse the markdown file
     let content = tokio::fs::read_to_string(path)
         .await
@@ -374,20 +675,196 @@ async fn upload_file(client: &WeChatClient, path: &Path, force: bool, verbose: b
     let (mut frontmatter, body) = parse_markdown(&content)?;
 
     // Check if already published
-    if !force {
-        if let Some(published) = &frontmatter.published {
-            if published == "true" {
+    if !force
+        && let Some(published) = &frontmatter.published
+        && published == "true"
+    {
+        if verbose {
+            tracing::info!("Skipping already published file: {}", path.display());
+        } else {
+            println!(
+                "{} {}",
+                "⏭".bright_yellow(),
+                format!("skipped: {}", path.display()).dimmed()
+            );
+        }
+        return Ok(());
+    }
+
+    // Generate cover image if missing or if file doesn't exist and OpenAI client is available
+    let mut needs_cover_regeneration = false;
+    if let Some(openai_client) = openai_client {
+        let should_generate_cover = match &frontmatter.cover {
+            None => {
+                // No cover field specified - generate new cover with auto filename
                 if verbose {
-                    tracing::info!("Skipping already published file: {}", path.display());
+                    tracing::info!("No cover image specified, generating one using AI...");
                 } else {
                     println!(
                         "{} {}",
-                        "⏭".bright_yellow(),
-                        format!("skipped: {}", path.display()).dimmed()
+                        "🎨".bright_cyan(),
+                        format!("generating cover: {}", path.display()).bright_white()
                     );
                 }
-                return Ok(());
+                true
             }
+            Some(cover_filename) => {
+                // Cover field exists - check if the file actually exists
+                let (cover_path, exists) = resolve_and_check_cover_path(path, cover_filename);
+                if !exists {
+                    if verbose {
+                        tracing::info!(
+                            "Cover image specified ({}) but file not found at {}, generating using AI...",
+                            cover_filename,
+                            cover_path.display()
+                        );
+                    } else {
+                        println!(
+                            "{} {}",
+                            "🎨".bright_cyan(),
+                            format!(
+                                "cover missing ({}), generating: {}",
+                                cover_filename,
+                                path.display()
+                            )
+                            .bright_white()
+                        );
+                    }
+                    true
+                } else {
+                    if verbose {
+                        tracing::info!("Cover image found at: {}", cover_path.display());
+                    }
+                    false
+                }
+            }
+        };
+
+        if should_generate_cover {
+            match &frontmatter.cover {
+                None => {
+                    // Generate with auto filename
+                    let base_filename = path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("article");
+
+                    match openai_client
+                        .generate_cover_image(&body, path, base_filename)
+                        .await
+                    {
+                        Ok(cover_filename) => {
+                            frontmatter.cover = Some(cover_filename.clone());
+                            needs_cover_regeneration = true;
+                            if verbose {
+                                tracing::info!(
+                                    "Successfully generated cover image: {}",
+                                    cover_filename
+                                );
+                            } else {
+                                println!(
+                                    "{} {} {}",
+                                    "✨".bright_green(),
+                                    "cover generated:".green(),
+                                    cover_filename
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            if verbose {
+                                tracing::warn!(
+                                    "Failed to generate cover image: {}. Continuing without cover.",
+                                    e
+                                );
+                            } else {
+                                println!(
+                                    "{} {}",
+                                    "⚠".bright_yellow(),
+                                    format!("cover generation failed: {}", e).yellow()
+                                );
+                            }
+                        }
+                    }
+                }
+                Some(cover_filename) => {
+                    // Generate to the specified path from frontmatter
+                    let (target_cover_path, _) = resolve_and_check_cover_path(path, cover_filename);
+
+                    match openai_client
+                        .generate_cover_image_to_path(&body, path, &target_cover_path)
+                        .await
+                    {
+                        Ok(()) => {
+                            needs_cover_regeneration = true;
+                            if verbose {
+                                tracing::info!(
+                                    "Successfully generated cover image to: {}",
+                                    target_cover_path.display()
+                                );
+                            } else {
+                                println!(
+                                    "{} {} {}",
+                                    "✨".bright_green(),
+                                    "cover generated:".green(),
+                                    cover_filename
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            if verbose {
+                                tracing::warn!(
+                                    "Failed to generate cover image to {}: {}. Continuing without cover.",
+                                    target_cover_path.display(),
+                                    e
+                                );
+                            } else {
+                                println!(
+                                    "{} {}",
+                                    "⚠".bright_yellow(),
+                                    format!("cover generation failed: {}", e).yellow()
+                                );
+                            }
+                            // Clear the cover field since we couldn't generate it
+                            frontmatter.cover = None;
+                            needs_cover_regeneration = true;
+                        }
+                    }
+                }
+            }
+        }
+    } else if let Some(cover_filename) = &frontmatter.cover {
+        // No OpenAI client but cover field exists - check if file exists
+        let (cover_path, exists) = resolve_and_check_cover_path(path, cover_filename);
+        if !exists {
+            if verbose {
+                tracing::warn!(
+                    "Cover image specified ({}) but file not found at {} and no OpenAI API key provided. Upload may fail.",
+                    cover_filename,
+                    cover_path.display()
+                );
+            } else {
+                println!(
+                    "{} {}",
+                    "⚠".bright_yellow(),
+                    format!(
+                        "cover missing ({}), no OpenAI key to generate",
+                        cover_filename
+                    )
+                    .yellow()
+                );
+            }
+        }
+    }
+
+    // If we generated a cover, save the updated frontmatter before upload
+    if needs_cover_regeneration {
+        let updated_content = format_markdown(&frontmatter, &body)?;
+        tokio::fs::write(path, &updated_content)
+            .await
+            .with_context(|| format!("Failed to update file with cover: {}", path.display()))?;
+
+        if verbose {
+            tracing::info!("Updated frontmatter with cover in: {}", path.display());
         }
     }
 
@@ -768,5 +1245,111 @@ Content
 
         let error_message = result.unwrap_err().to_string();
         assert!(error_message.contains("Failed to parse frontmatter"));
+    }
+
+    #[test]
+    fn test_frontmatter_with_cover() {
+        let content = r#"---
+title: "Article with Cover"
+published: "draft"
+cover: "my-cover.png"
+---
+# Article Content
+"#;
+
+        let (frontmatter, body) = parse_markdown(content).unwrap();
+
+        assert_eq!(frontmatter.title, Some("Article with Cover".to_string()));
+        assert_eq!(frontmatter.published, Some("draft".to_string()));
+        assert_eq!(frontmatter.cover, Some("my-cover.png".to_string()));
+        assert!(body.contains("Article Content"));
+    }
+
+    #[test]
+    fn test_frontmatter_without_cover() {
+        let content = r#"---
+title: "Article without Cover"
+published: "draft"
+---
+# Article Content
+"#;
+
+        let (frontmatter, _) = parse_markdown(content).unwrap();
+
+        assert_eq!(frontmatter.title, Some("Article without Cover".to_string()));
+        assert_eq!(frontmatter.published, Some("draft".to_string()));
+        assert_eq!(frontmatter.cover, None);
+    }
+
+    #[test]
+    fn test_format_markdown_with_cover() {
+        let frontmatter = Frontmatter {
+            title: Some("Test Article".to_string()),
+            published: Some("draft".to_string()),
+            cover: Some("test-cover.png".to_string()),
+            ..Default::default()
+        };
+
+        let body = "# Test Content";
+        let result = format_markdown(&frontmatter, body).unwrap();
+
+        assert!(result.contains("title: Test Article"));
+        assert!(result.contains("published: draft"));
+        assert!(result.contains("cover: test-cover.png"));
+        assert!(result.contains("# Test Content"));
+    }
+
+    #[test]
+    fn test_openai_client_create_dalle_prompt() {
+        let client = OpenAIClient::new("test-key".to_string());
+        let scene_description = "A serene forest with morning mist";
+        let prompt = client.create_dalle_prompt(scene_description);
+
+        assert!(prompt.contains("Ghibli-style"));
+        assert!(prompt.contains("A serene forest with morning mist"));
+    }
+
+    #[test]
+    fn test_resolve_and_check_cover_path() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        // Create a temporary directory for testing
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path();
+
+        // Create a markdown file
+        let md_file = temp_path.join("test.md");
+        fs::write(&md_file, "# Test").unwrap();
+
+        // Create an existing cover image
+        let existing_cover = temp_path.join("existing.png");
+        fs::write(&existing_cover, "fake image data").unwrap();
+
+        // Test with existing file
+        let (resolved_path, exists) = resolve_and_check_cover_path(&md_file, "existing.png");
+        assert_eq!(resolved_path, existing_cover);
+        assert!(exists);
+
+        // Test with missing file
+        let (resolved_path, exists) = resolve_and_check_cover_path(&md_file, "missing.png");
+        assert_eq!(resolved_path, temp_path.join("missing.png"));
+        assert!(!exists);
+
+        // Test with absolute path
+        let abs_path = temp_path.join("absolute.png").to_string_lossy().to_string();
+        let (resolved_path, exists) = resolve_and_check_cover_path(&md_file, &abs_path);
+        assert_eq!(resolved_path, temp_path.join("absolute.png"));
+        assert!(!exists);
+
+        // Test with subdirectory path
+        let images_dir = temp_path.join("images");
+        fs::create_dir(&images_dir).unwrap();
+        let subdir_cover = images_dir.join("cover.png");
+        fs::write(&subdir_cover, "fake image data").unwrap();
+
+        let (resolved_path, exists) = resolve_and_check_cover_path(&md_file, "images/cover.png");
+        assert_eq!(resolved_path, subdir_cover);
+        assert!(exists);
     }
 }
