@@ -4,6 +4,7 @@
 //! using GPT-5-mini for scene descriptions and gpt-image-1 for image generation.
 
 use crate::error::{Error, Result};
+use crate::output::{ApiErrorFormatter, FORMATTER, FilePathFormatter, OutputFormatter};
 use base64::Engine;
 use reqwest::Client;
 use serde_json::{Value, json};
@@ -96,11 +97,7 @@ impl OpenAIClient {
                 desc
             }
             Err(e) => {
-                eprintln!(
-                    "  {} Failed to generate scene description: {}",
-                    "❌".bright_red(),
-                    e
-                );
+                FORMATTER.print_error(&FORMATTER.format_scene_description_failure(&e.to_string()));
                 return Err(e);
             }
         };
@@ -110,11 +107,7 @@ impl OpenAIClient {
         info!("DALL-E prompt: {}", dalle_prompt);
 
         // Show prompt in console for user visibility
-        println!(
-            "  {} {}",
-            "→".bright_blue(),
-            format!("Image prompt: {}", dalle_prompt).bright_white()
-        );
+        println!("{}", FORMATTER.format_image_prompt(&dalle_prompt));
 
         // Generate image
         let image_url = match self.generate_image(&dalle_prompt).await {
@@ -123,7 +116,7 @@ impl OpenAIClient {
                 url
             }
             Err(e) => {
-                eprintln!("  {} Failed to generate image: {}", "❌".bright_red(), e);
+                FORMATTER.print_error(&FORMATTER.format_image_generation_failure(&e.to_string()));
                 return Err(e);
             }
         };
@@ -158,11 +151,7 @@ impl OpenAIClient {
         _markdown_file_path: &Path,
         target_cover_path: &Path,
     ) -> Result<()> {
-        println!(
-            "  {} Target path: {}",
-            "📍".bright_cyan(),
-            target_cover_path.display()
-        );
+        println!("{}", FORMATTER.format_target_path(target_cover_path));
 
         // Generate scene description from content
         let scene_description = match self.generate_scene_description(content).await {
@@ -171,11 +160,7 @@ impl OpenAIClient {
                 desc
             }
             Err(e) => {
-                eprintln!(
-                    "  {} Failed to generate scene description: {}",
-                    "❌".bright_red(),
-                    e
-                );
+                FORMATTER.print_error(&FORMATTER.format_scene_description_failure(&e.to_string()));
                 return Err(e);
             }
         };
@@ -185,11 +170,7 @@ impl OpenAIClient {
         info!("DALL-E prompt: {}", dalle_prompt);
 
         // Show prompt in console for user visibility
-        println!(
-            "  {} {}",
-            "→".bright_blue(),
-            format!("Image prompt: {}", dalle_prompt).bright_white()
-        );
+        println!("{}", FORMATTER.format_image_prompt(&dalle_prompt));
 
         // Generate image
         let image_url = match self.generate_image(&dalle_prompt).await {
@@ -198,7 +179,7 @@ impl OpenAIClient {
                 url
             }
             Err(e) => {
-                eprintln!("  {} Failed to generate image: {}", "❌".bright_red(), e);
+                FORMATTER.print_error(&FORMATTER.format_image_generation_failure(&e.to_string()));
                 return Err(e);
             }
         };
@@ -206,19 +187,11 @@ impl OpenAIClient {
         // Download and save the image to the specified path
         match self.download_image(&image_url, target_cover_path).await {
             Ok(()) => {
-                println!(
-                    "  {} Image saved to: {}",
-                    "💾".bright_green(),
-                    target_cover_path.display()
-                );
+                println!("{}", FORMATTER.format_image_saved(target_cover_path));
                 Ok(())
             }
             Err(e) => {
-                eprintln!(
-                    "  {} Failed to download/save image: {}",
-                    "❌".bright_red(),
-                    e
-                );
+                FORMATTER.print_error(&FORMATTER.format_image_download_failure(&e.to_string()));
                 Err(e)
             }
         }
@@ -243,10 +216,14 @@ impl OpenAIClient {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
-            eprintln!("  {} OpenAI API Error:", "⚠".bright_yellow());
-            eprintln!("    Status: {}", status);
-            eprintln!("    Response: {}", error_text);
-            eprintln!("    Endpoint: {}/{}", self.base_url, endpoint);
+            eprintln!(
+                "{}",
+                FORMATTER.format_openai_error(
+                    status.as_u16(),
+                    &error_text,
+                    &format!("{}/{}", self.base_url, endpoint)
+                )
+            );
             return Err(Error::openai(format!(
                 "API request failed with status {}: {}",
                 status, error_text
@@ -433,9 +410,6 @@ impl Default for OpenAIClientBuilder {
         Self::new()
     }
 }
-
-// Add colored import for console output
-use colored::*;
 
 #[cfg(test)]
 mod tests {

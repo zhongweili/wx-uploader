@@ -5,8 +5,9 @@
 
 use crate::error::{Error, Result};
 use crate::markdown::{parse_markdown_file, update_frontmatter, write_markdown_file};
+use crate::models::Frontmatter;
 use crate::openai::OpenAIClient;
-use colored::*;
+use crate::output::{FORMATTER, FilePathFormatter, OutputFormatter};
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 use walkdir::WalkDir;
@@ -163,11 +164,7 @@ pub async fn process_directory(
         .collect();
 
     if entries.is_empty() {
-        println!(
-            "{} {}",
-            "ℹ".bright_blue(),
-            "No markdown files found in directory".dimmed()
-        );
+        FORMATTER.print_info("No markdown files found in directory");
         return Ok(());
     }
 
@@ -180,13 +177,8 @@ pub async fn process_directory(
 
 /// Uploads a single markdown file to WeChat public account.
 ///
-/// This function handles the complete upload workflow:
-/// 1. Reads and parses the markdown file
-/// 2. Checks publication status (unless forced)
-/// 3. Generates cover image if missing and OpenAI client is available
-/// 4. Uploads to WeChat if needed
-/// 5. Updates the frontmatter with draft status and cover image
-/// 6. Writes the updated content back to the file
+/// This function orchestrates the complete upload workflow by delegating
+/// to specialized functions for each step.
 ///
 /// # Arguments
 ///
@@ -196,22 +188,9 @@ pub async fn process_directory(
 /// * `force` - If true, uploads regardless of published status
 /// * `verbose` - Whether to enable detailed tracing logs
 ///
-/// # Behavior
-///
-/// - If `force` is false and the file has `published: "true"`, it will be skipped
-/// - If no cover image is specified and OpenAI client is available, generates one
-/// - After successful upload, the frontmatter is updated with `published: "draft"`
-/// - The original file is modified to reflect the new status
-/// - Output format depends on verbose flag: clean user-friendly messages or detailed logs
-///
 /// # Errors
 ///
-/// Returns an error if:
-/// - File reading fails
-/// - Markdown parsing fails
-/// - Cover image generation fails (if attempted)
-/// - WeChat upload fails
-/// - File writing fails
+/// Returns an error if any step of the upload process fails
 pub async fn upload_file(
     client: &WeChatClient,
     openai_client: Option<&OpenAIClient>,
@@ -219,112 +198,152 @@ pub async fn upload_file(
     force: bool,
     verbose: bool,
 ) -> Result<()> {
-    // Read and parse the markdown file
-    let (mut frontmatter, body) = parse_markdown_file(path).await?;
+    // Parse the markdown file and check publication status
+    let (mut frontmatter, body) = match parse_and_check_file(path, force, verbose).await {
+        Ok(result) => result,
+        Err(_) => return Ok(()), // File was skipped
+    };
+
+    // Handle cover image processing if needed
+    let cover_updated = process_cover_image(&mut frontmatter, path, openai_client, verbose).await?;
+
+    // Save frontmatter if cover was updated
+    if cover_updated {
+        write_markdown_file(path, &frontmatter, &body).await?;
+        if verbose {
+            info!("Updated frontmatter with cover in: {}", path.display());
+        }
+    }
+
+    // Execute the WeChat upload
+    execute_wechat_upload(client, path, verbose).await?;
+
+    // Update the file with published status
+    update_published_status(path, verbose).await?;
+
+    Ok(())
+}
+
+/// Parses markdown file and checks if it should be uploaded
+///
+/// # Returns
+///
+/// Returns the frontmatter and body if the file should be processed,
+/// or returns an error if the file should be skipped
+async fn parse_and_check_file(
+    path: &Path,
+    force: bool,
+    verbose: bool,
+) -> Result<(Frontmatter, String)> {
+    let (frontmatter, body) = parse_markdown_file(path).await?;
 
     // Check if already published
     if !force && frontmatter.is_published() {
         if verbose {
             info!("Skipping already published file: {}", path.display());
         } else {
-            println!(
-                "{} {}",
-                "⏭".bright_yellow(),
-                format!("skipped: {}", path.display()).dimmed()
-            );
+            FORMATTER.print_skip(&FORMATTER.format_skip_published(path));
         }
-        return Ok(());
+        return Err(Error::generic("File already published"));
     }
 
-    // Handle cover image generation
-    let processor = DefaultCoverImageProcessor::new(openai_client);
-    let mut cover_updated = false;
+    Ok((frontmatter, body))
+}
 
-    if let Some(_openai_client) = openai_client {
-        if verbose {
-            info!("OpenAI client available for cover generation");
+/// Processes cover image generation and updating
+///
+/// # Returns
+///
+/// Returns true if the frontmatter was updated with a new cover image
+async fn process_cover_image(
+    frontmatter: &mut Frontmatter,
+    path: &Path,
+    openai_client: Option<&OpenAIClient>,
+    verbose: bool,
+) -> Result<bool> {
+    let Some(openai_client) = openai_client else {
+        check_existing_cover(frontmatter, path, verbose);
+        return Ok(false);
+    };
+
+    if verbose {
+        info!("OpenAI client available for cover generation");
+    }
+
+    let should_generate = should_generate_cover(frontmatter, path, verbose).await;
+
+    if !should_generate {
+        return Ok(false);
+    }
+
+    let processor = DefaultCoverImageProcessor::new(Some(openai_client));
+
+    match processor
+        .ensure_cover_image(&frontmatter.description, path, frontmatter.cover.as_deref())
+        .await?
+    {
+        Some(cover_filename) => {
+            frontmatter.set_cover(cover_filename.clone());
+
+            if verbose {
+                info!("Successfully generated cover image: {}", cover_filename);
+            } else {
+                FORMATTER.print_generation(&FORMATTER.format_cover_success(&cover_filename));
+            }
+            Ok(true)
         }
-        let should_generate_cover = match &frontmatter.cover {
-            None => {
+        None => {
+            if verbose {
+                warn!("Cover generation failed but continuing without error");
+            } else {
+                FORMATTER.print_warning(&FORMATTER.format_cover_failure());
+            }
+            Ok(false)
+        }
+    }
+}
+
+/// Determines if a cover image should be generated
+async fn should_generate_cover(frontmatter: &Frontmatter, path: &Path, verbose: bool) -> bool {
+    match &frontmatter.cover {
+        None => {
+            if verbose {
+                info!("No cover image specified, generating one using AI...");
+            } else {
+                FORMATTER.print_generation(&FORMATTER.format_cover_generation(path));
+            }
+            true
+        }
+        Some(cover_filename) => {
+            let (cover_path, exists) = resolve_and_check_cover_path(path, cover_filename);
+            if !exists {
                 if verbose {
-                    info!("No cover image specified, generating one using AI...");
-                } else {
-                    println!(
-                        "{} {}",
-                        "🎨".bright_cyan(),
-                        format!("generating cover: {}", path.display()).bright_white()
+                    info!(
+                        "Cover image specified ({}) but file not found at {}, generating using AI...",
+                        cover_filename,
+                        cover_path.display()
                     );
+                } else {
+                    FORMATTER.print_generation(&format!(
+                        "cover missing ({}), generating: {}",
+                        cover_filename,
+                        path.display()
+                    ));
                 }
                 true
-            }
-            Some(cover_filename) => {
-                let (cover_path, exists) = processor.resolve_cover_path(path, cover_filename).await;
-                if !exists {
-                    if verbose {
-                        info!(
-                            "Cover image specified ({}) but file not found at {}, generating using AI...",
-                            cover_filename,
-                            cover_path.display()
-                        );
-                    } else {
-                        println!(
-                            "{} {}",
-                            "🎨".bright_cyan(),
-                            format!(
-                                "cover missing ({}), generating: {}",
-                                cover_filename,
-                                path.display()
-                            )
-                            .bright_white()
-                        );
-                    }
-                    true
-                } else {
-                    if verbose {
-                        info!("Cover image found at: {}", cover_path.display());
-                    }
-                    false
+            } else {
+                if verbose {
+                    info!("Cover image found at: {}", cover_path.display());
                 }
-            }
-        };
-
-        if should_generate_cover {
-            match processor
-                .ensure_cover_image(&body, path, frontmatter.cover.as_deref())
-                .await?
-            {
-                Some(cover_filename) => {
-                    frontmatter.set_cover(cover_filename.clone());
-                    cover_updated = true;
-
-                    if verbose {
-                        info!("Successfully generated cover image: {}", cover_filename);
-                    } else {
-                        println!(
-                            "{} {} {}",
-                            "✨".bright_green(),
-                            "cover generated:".green(),
-                            cover_filename
-                        );
-                    }
-                }
-                None => {
-                    if verbose {
-                        warn!("Cover generation failed but continuing without error");
-                    } else {
-                        println!(
-                            "{} {}",
-                            "⚠".bright_yellow(),
-                            "cover generation failed, continuing...".yellow()
-                        );
-                    }
-                    // Keep the original cover field even if generation failed
-                    // This preserves the user's intended cover filename for future attempts
-                }
+                false
             }
         }
-    } else if let Some(cover_filename) = &frontmatter.cover {
-        // No OpenAI client but cover field exists - check if file exists
+    }
+}
+
+/// Checks if existing cover file exists when no OpenAI client is available
+fn check_existing_cover(frontmatter: &Frontmatter, path: &Path, verbose: bool) {
+    if let Some(cover_filename) = &frontmatter.cover {
         let (cover_path, exists) = resolve_and_check_cover_path(path, cover_filename);
         if !exists {
             if verbose {
@@ -334,37 +353,25 @@ pub async fn upload_file(
                     cover_path.display()
                 );
             } else {
-                println!(
-                    "{} {}",
-                    "⚠".bright_yellow(),
-                    format!(
-                        "cover missing ({}), no OpenAI key to generate",
-                        cover_filename
-                    )
-                    .yellow()
-                );
+                FORMATTER.print_warning(&format!(
+                    "cover missing ({}), no OpenAI key to generate",
+                    cover_filename
+                ));
             }
         }
     }
+}
 
-    // If we generated or updated cover info, save the updated frontmatter before upload
-    if cover_updated {
-        write_markdown_file(path, &frontmatter, &body).await?;
-
-        if verbose {
-            info!("Updated frontmatter with cover in: {}", path.display());
-        }
-    }
-
-    // Upload to WeChat using original file path to preserve relative image paths
+/// Executes the WeChat upload operation
+async fn execute_wechat_upload(
+    client: &WeChatClient,
+    path: &Path,
+    verbose: bool,
+) -> Result<String> {
     if verbose {
         info!("Uploading file: {}", path.display());
     } else {
-        println!(
-            "{} {}",
-            "🔄".bright_blue(),
-            format!("uploading: {}", path.display()).bright_white()
-        );
+        FORMATTER.print_progress(&FORMATTER.format_file_operation("uploading", path));
     }
 
     let path_str = path
@@ -376,43 +383,36 @@ pub async fn upload_file(
             if verbose {
                 info!("Successfully uploaded with draft ID: {}", draft_id);
             } else {
-                println!(
-                    "{} {} {}",
-                    "✓".bright_green(),
-                    "uploaded:".green(),
-                    path.display()
-                );
+                FORMATTER.print_success(&FORMATTER.format_upload_success(path));
             }
-
-            // Update frontmatter with published status
-            update_frontmatter(path, |fm| {
-                fm.set_published("draft");
-                Ok(())
-            })
-            .await?;
-
-            if verbose {
-                info!(
-                    "Updated frontmatter with draft status in: {}",
-                    path.display()
-                );
-            }
+            Ok(draft_id)
         }
         Err(e) => {
             let error_msg = format!("WeChat upload failed: {}", e);
             if verbose {
                 warn!("Failed to upload {}: {}", path.display(), error_msg);
             } else {
-                println!(
-                    "{} {} {}",
-                    "✗".bright_red(),
-                    "failed:".red(),
-                    path.display()
-                );
-                eprintln!("{} {}", "Error:".bright_red(), error_msg);
+                FORMATTER.print_error(&FORMATTER.format_upload_failure(path));
+                eprintln!("Error: {}", error_msg);
             }
-            return Err(Error::wechat(error_msg));
+            Err(Error::wechat(error_msg))
         }
+    }
+}
+
+/// Updates the frontmatter with published status after successful upload
+async fn update_published_status(path: &Path, verbose: bool) -> Result<()> {
+    update_frontmatter(path, |fm| {
+        fm.set_published("draft");
+        Ok(())
+    })
+    .await?;
+
+    if verbose {
+        info!(
+            "Updated frontmatter with draft status in: {}",
+            path.display()
+        );
     }
 
     Ok(())

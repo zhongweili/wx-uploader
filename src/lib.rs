@@ -36,6 +36,7 @@ pub mod error;
 pub mod markdown;
 pub mod models;
 pub mod openai;
+pub mod output;
 pub mod wechat;
 
 pub use error::{Error, Result};

@@ -148,6 +148,10 @@ pub struct Frontmatter {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
 
+    /// Description of the article.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+
     /// Captures any additional fields in the frontmatter that are not
     /// explicitly defined in this struct.
     #[serde(flatten)]
@@ -195,7 +199,20 @@ impl Frontmatter {
 
     /// Checks if the article is published
     pub fn is_published(&self) -> bool {
-        matches!(self.published.as_deref(), Some("true"))
+        // Check the published field first
+        if matches!(self.published.as_deref(), Some("true") | Some("\"true\"")) {
+            return true;
+        }
+
+        // Check if published is a boolean true in the other field
+        if let serde_yaml::Value::Mapping(map) = &self.other
+            && let Some(serde_yaml::Value::Bool(true)) =
+                map.get(serde_yaml::Value::String("published".to_string()))
+        {
+            return true;
+        }
+
+        false
     }
 
     /// Checks if the article is a draft
@@ -436,6 +453,7 @@ mod tests {
         let frontmatter = Frontmatter {
             title: Some("Test Article".to_string()),
             published: Some("draft".to_string()),
+            description: "Test Article".to_string(),
             cover: Some("cover.png".to_string()),
             theme: Some("lapis".to_string()),
             code: Some("github".to_string()),
