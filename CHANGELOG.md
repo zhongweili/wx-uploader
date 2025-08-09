@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] - 2025-08-09
+
+### 🚀 Features
+
+- Integrate OpenAI SDK for automatic cover image generation
+- Update to latest OpenAI models
+- Add base64 image handling for gpt-image-1 model
+- Refactor the code based on code review
+
+### 🐛 Bug Fixes
+
+- Preserve cover field in frontmatter when image is missing
+- Use correct OpenAI model names for API calls
+- Resolve OpenAI API parameter compatibility issues
+
+### ⚙️ Miscellaneous Tasks
+
+- Remove unnecessary debug output from OpenAI integration
+
 ## [0.4.2] - 2025-08-03
 
 ### ⚙️ Miscellaneous Tasks
