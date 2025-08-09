@@ -241,6 +241,9 @@ pub async fn upload_file(
     let mut cover_updated = false;
 
     if let Some(_openai_client) = openai_client {
+        if verbose {
+            info!("OpenAI client available for cover generation");
+        }
         let should_generate_cover = match &frontmatter.cover {
             None => {
                 if verbose {

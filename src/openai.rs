@@ -89,8 +89,20 @@ impl OpenAIClient {
         base_filename: &str,
     ) -> Result<String> {
         // Generate scene description from content
-        let scene_description = self.generate_scene_description(content).await?;
-        info!("Generated scene description: {}", scene_description);
+        let scene_description = match self.generate_scene_description(content).await {
+            Ok(desc) => {
+                info!("Generated scene description: {}", desc);
+                desc
+            }
+            Err(e) => {
+                eprintln!(
+                    "  {} Failed to generate scene description: {}",
+                    "❌".bright_red(),
+                    e
+                );
+                return Err(e);
+            }
+        };
 
         // Create DALL-E prompt
         let dalle_prompt = self.create_dalle_prompt(&scene_description);
@@ -104,7 +116,16 @@ impl OpenAIClient {
         );
 
         // Generate image
-        let image_url = self.generate_image(&dalle_prompt).await?;
+        let image_url = match self.generate_image(&dalle_prompt).await {
+            Ok(url) => {
+                info!("Successfully generated image URL: {}", url);
+                url
+            }
+            Err(e) => {
+                eprintln!("  {} Failed to generate image: {}", "❌".bright_red(), e);
+                return Err(e);
+            }
+        };
 
         // Create filename for the cover image
         let cover_filename = format!(
@@ -136,9 +157,27 @@ impl OpenAIClient {
         _markdown_file_path: &Path,
         target_cover_path: &Path,
     ) -> Result<()> {
+        println!(
+            "  {} Target path: {}",
+            "📍".bright_cyan(),
+            target_cover_path.display()
+        );
+
         // Generate scene description from content
-        let scene_description = self.generate_scene_description(content).await?;
-        info!("Generated scene description: {}", scene_description);
+        let scene_description = match self.generate_scene_description(content).await {
+            Ok(desc) => {
+                info!("Generated scene description: {}", desc);
+                desc
+            }
+            Err(e) => {
+                eprintln!(
+                    "  {} Failed to generate scene description: {}",
+                    "❌".bright_red(),
+                    e
+                );
+                return Err(e);
+            }
+        };
 
         // Create DALL-E prompt
         let dalle_prompt = self.create_dalle_prompt(&scene_description);
@@ -152,12 +191,37 @@ impl OpenAIClient {
         );
 
         // Generate image
-        let image_url = self.generate_image(&dalle_prompt).await?;
+        let image_url = match self.generate_image(&dalle_prompt).await {
+            Ok(url) => {
+                info!("Successfully generated image URL: {}", url);
+                println!("  {} Image URL generated successfully", "✓".bright_green());
+                url
+            }
+            Err(e) => {
+                eprintln!("  {} Failed to generate image: {}", "❌".bright_red(), e);
+                return Err(e);
+            }
+        };
 
         // Download and save the image to the specified path
-        self.download_image(&image_url, target_cover_path).await?;
-
-        Ok(())
+        match self.download_image(&image_url, target_cover_path).await {
+            Ok(()) => {
+                println!(
+                    "  {} Image saved to: {}",
+                    "💾".bright_green(),
+                    target_cover_path.display()
+                );
+                Ok(())
+            }
+            Err(e) => {
+                eprintln!(
+                    "  {} Failed to download/save image: {}",
+                    "❌".bright_red(),
+                    e
+                );
+                Err(e)
+            }
+        }
     }
 
     /// Makes a POST request to the OpenAI API
@@ -179,6 +243,10 @@ impl OpenAIClient {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
+            eprintln!("  {} OpenAI API Error:", "⚠".bright_yellow());
+            eprintln!("    Status: {}", status);
+            eprintln!("    Response: {}", error_text);
+            eprintln!("    Endpoint: {}/{}", self.base_url, endpoint);
             return Err(Error::openai(format!(
                 "API request failed with status {}: {}",
                 status, error_text
@@ -202,11 +270,12 @@ impl SceneDescriptionGenerator for OpenAIClient {
                 },
                 {
                     "role": "user",
-                    "content": format!("Please analyze this markdown content and generate a scene description:\n\n{}", content)
+                    "content": format!("Please analyze this markdown content and generate a scene description:\n\n{}",
+                        if content.len() > 3000 { &content[..3000] } else { content })
                 }
             ],
-            "max_tokens": 150,
-            "temperature": 0.7
+            "max_completion_tokens": 150,
+            "temperature": 1
         });
 
         let response_json = self.post_request("chat/completions", request_body).await?;
@@ -236,9 +305,8 @@ impl ImageGenerator for OpenAIClient {
         let request_body = json!({
             "model": "gpt-image-1",
             "prompt": prompt,
-            "size": "1792x1024",  // 16:9 aspect ratio
-            "quality": "standard",
-            "response_format": "url",
+            "size": "1536x1024",  // Close to 16:9 aspect ratio
+            "quality": "high",
             "n": 1
         });
 
