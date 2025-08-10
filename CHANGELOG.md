@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.1] - 2025-08-10
+
+### 📚 Documentation
+
+- Update README with latest project features
+
+### ⚙️ Miscellaneous Tasks
+
+- Add license
+- Bump dep version
+
 ## [0.5.0] - 2025-08-09
 
 ### 🚀 Features
