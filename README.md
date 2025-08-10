@@ -1,6 +1,6 @@
 # wx-uploader
 
-A command-line tool to upload markdown files to WeChat public account with automatic AI-powered cover image generation.
+A command-line tool to upload markdown files to WeChat public account with automatic AI-powered cover image generation. See [README_CN.md](README_CN.md) for Chinese version.
 
 ## Installation
 
@@ -80,7 +80,7 @@ Your markdown content here...
 
 When the `OPENAI_API_KEY` environment variable is set, the tool will automatically generate beautiful cover images for articles that don't have one specified.
 
-### How it works:
+### How it works
 
 1. **Content Analysis**: GPT-5-mini analyzes your markdown content to create a vivid scene description
 2. **Prompt Generation**: Creates an optimized prompt for image generation focusing on Studio Ghibli-style artwork
@@ -88,7 +88,7 @@ When the `OPENAI_API_KEY` environment variable is set, the tool will automatical
 4. **Auto-Save**: Downloads and saves the image in the same directory as your markdown file
 5. **Metadata Update**: Updates your frontmatter with the generated cover filename
 
-### Features:
+### Features
 
 - **Studio Ghibli Style**: Beautiful, artistic aesthetic with soft colors and natural elements
 - **Content-Aware**: Scene descriptions are based on your actual article content
@@ -97,7 +97,7 @@ When the `OPENAI_API_KEY` environment variable is set, the tool will automatical
 - **Graceful Fallback**: Continues normal upload process if image generation fails
 - **Base64 Support**: Handles both URL and base64-encoded image responses
 
-### Example Output:
+### Example Output
 
 For an article about "Building Rust Applications", the AI might generate a scene like:
 > "A cozy workshop filled with intricate gears and glowing mechanical tools, where a craftsman carefully assembles clockwork mechanisms. Warm golden light streams through tall windows, illuminating floating rust particles that sparkle like fireflies in the dusty air."
