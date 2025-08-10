@@ -2766,9 +2766,9 @@ dependencies = [
 
 [[package]]
 name = "wechat-pub-rs"
-version = "0.5.1"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "145aca3c39c881b279da41780b1e8f4fa198c4de2a7099d8def0bf64f12297ec"
+checksum = "e77c6f33df9999014d8a59f02344d779adac2f3095445f6e92451b00e125c005"
 dependencies = [
  "anyhow",
  "askama",
@@ -3063,7 +3063,7 @@ checksum = "ea2f10b9bb0928dfb1b42b65e1f9e36f7f54dbdf08457afefb38afcdec4fa2bb"
 
 [[package]]
 name = "wx-uploader"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "async-trait",
