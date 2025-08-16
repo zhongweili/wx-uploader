@@ -82,6 +82,20 @@ impl WxUploader {
         })
     }
 
+    /// Forces a refresh of the WeChat access token
+    ///
+    /// This clears the in-memory token cache and fetches a new token from the WeChat API.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the token refresh fails
+    pub async fn refresh_token(&self) -> Result<String> {
+        self.wechat_client
+            .refresh_token()
+            .await
+            .map_err(|e| Error::wechat(e.to_string()))
+    }
+
     /// Uploads a single markdown file to WeChat
     ///
     /// # Arguments

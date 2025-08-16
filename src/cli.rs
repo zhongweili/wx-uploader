@@ -35,6 +35,14 @@ pub struct Args {
         help = "Enable verbose logging with detailed tracing information"
     )]
     pub verbose: bool,
+
+    /// Force refresh WeChat access token before operation
+    #[arg(
+        short = 'r',
+        long = "refresh",
+        help = "Force refresh WeChat access token before operation. This gets a new token from WeChat API."
+    )]
+    pub clear_cache: bool,
 }
 
 /// Print colored help message with detailed information about usage and features
@@ -70,6 +78,11 @@ pub fn print_colored_help() {
         "  {}, {}  Enable verbose logging with detailed tracing information",
         "-v".bright_cyan(),
         "--verbose".bright_cyan()
+    );
+    println!(
+        "  {}, {}  Force refresh WeChat access token",
+        "-r".bright_cyan(),
+        "--refresh".bright_cyan()
     );
     println!(
         "  {}, {}     Print help",
@@ -142,6 +155,11 @@ pub fn print_colored_help() {
         "wx-uploader -v ./blog/".bright_white().bold(),
         "#".bright_black()
     );
+    println!(
+        "  {}  {} Force refresh token & upload",
+        "wx-uploader -r article.md".bright_white().bold(),
+        "#".bright_black()
+    );
 }
 
 /// Validates command-line arguments
@@ -206,6 +224,7 @@ mod tests {
         let args = Args {
             path: file_path,
             verbose: false,
+            clear_cache: false,
         };
 
         assert!(validate_args(&args).is_ok());
@@ -217,6 +236,7 @@ mod tests {
         let args = Args {
             path: temp_dir.path().to_path_buf(),
             verbose: false,
+            clear_cache: false,
         };
 
         assert!(validate_args(&args).is_ok());
@@ -227,6 +247,7 @@ mod tests {
         let args = Args {
             path: PathBuf::from("nonexistent/path"),
             verbose: false,
+            clear_cache: false,
         };
 
         assert!(validate_args(&args).is_err());
@@ -247,6 +268,7 @@ mod tests {
         let args = Args {
             path: temp_dir.path().to_path_buf(),
             verbose: true,
+            clear_cache: false,
         };
 
         // This test mainly ensures the function doesn't panic
@@ -255,6 +277,7 @@ mod tests {
         let args = Args {
             path: temp_dir.path().to_path_buf(),
             verbose: false,
+            clear_cache: false,
         };
 
         display_banner(&args);
@@ -266,6 +289,7 @@ mod tests {
         let args = Args {
             path: PathBuf::from("test.md"),
             verbose: true,
+            clear_cache: false,
         };
 
         assert_eq!(args.path, PathBuf::from("test.md"));

@@ -38,6 +38,20 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to initialize WeChat uploader")?;
 
+    // Clear cache and refresh token if requested
+    if args.clear_cache {
+        if args.verbose {
+            println!("Refreshing WeChat access token...");
+        }
+        uploader
+            .refresh_token()
+            .await
+            .context("Failed to refresh WeChat token")?;
+        if !args.verbose {
+            println!("WeChat access token refreshed");
+        }
+    }
+
     // Process the input path
     if args.path.is_file() {
         // Force upload single file
