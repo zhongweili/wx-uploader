@@ -4,7 +4,7 @@ use wx_uploader::{
     error::Result,
     markdown::{parse_markdown_file, write_markdown_file},
     models::Frontmatter,
-    wechat::{CoverImageProcessor, DefaultCoverImageProcessor, resolve_and_check_cover_path},
+    wechat::{DefaultCoverImageProcessor, LocalCoverImageProcessor, resolve_and_check_cover_path},
 };
 
 /// Integration tests for file processing functionality.

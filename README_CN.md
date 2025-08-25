@@ -1,6 +1,6 @@
 # wx-uploader
 
-一个用于上传 Markdown 文件到微信公众号的命令行工具，支持 AI 自动生成封面图片。
+一个用于上传 Markdown 文件到微信公众号的命令行工具，支持多账号管理和 AI 自动生成封面图片。
 
 ## 安装
 
@@ -20,20 +20,66 @@ cargo install --path .
 
 ## 前置条件
 
-在使用此工具之前，您需要设置以下环境变量：
+您可以通过两种方式配置 wx-uploader：环境变量（单账号）或配置文件（多账号）。
+
+### 方式一：环境变量（单账号）
 
 ```bash
 # 必需：微信公众号凭证
 export WECHAT_APP_ID="your_app_id"
 export WECHAT_APP_SECRET="your_app_secret"
 
-# 可选：用于自动生成封面图的 OpenAI API 密钥
+# 可选：AI 提供商配置，用于自动生成封面图
+# 选项 1：OpenAI（默认）
 export OPENAI_API_KEY="your_openai_api_key"
+
+# 选项 2：Google Gemini（支持文本和图像生成）
+export AI_PROVIDER="gemini"
+export GEMINI_API_KEY="your_gemini_api_key"
+```
+
+### 方式二：配置文件（多账号支持）
+
+创建配置文件来管理多个微信公众号：
+
+```bash
+# 生成示例配置文件
+wx-uploader --init-config config.yaml
+```
+
+这会创建一个配置文件，如下所示：
+
+```yaml
+# 示例配置文件
+accounts:
+  personal:
+    name: "personal"
+    app_id: "your_personal_app_id_here"
+    app_secret: "your_personal_app_secret_here"
+    description: "个人微信公众号"
+  
+  work:
+    name: "work"
+    app_id: "your_work_app_id_here"
+    app_secret: "your_work_app_secret_here"
+    description: "工作微信公众号"
+
+default_account: "personal"
+
+ai_provider:
+  provider: "openai"  # 或 "gemini"
+  openai:
+    api_key: "your_openai_api_key_here"
+  gemini:
+    api_key: "your_gemini_api_key_here"
+
+settings:
+  verbose: false
 ```
 
 ## 使用方法
 
-### 上传目录中的所有 Markdown 文件
+### 基础使用（单账号）
 
 ```bash
 # 上传所有 frontmatter 中没有 `published: true` 的 .md 文件
@@ -44,6 +90,28 @@ wx-uploader ./posts
 
 # 启用详细输出
 wx-uploader --verbose ./posts
+
+# 使用指定的 AI 提供商
+wx-uploader --provider gemini ./posts
+
+# 使用自定义 AI API 密钥
+wx-uploader --ai-key your_custom_key ./posts
+```
+
+### 多账号使用
+
+```bash
+# 列出配置文件中的可用账号
+wx-uploader --config config.yaml --list-accounts
+
+# 使用配置文件中的指定账号上传
+wx-uploader --config config.yaml --account work ./posts
+
+# 使用默认账号上传
+wx-uploader --config config.yaml ./posts
+
+# 为此次上传覆盖 AI 提供商
+wx-uploader --config config.yaml --provider gemini --account personal ./posts
 ```
 
 ### 上传指定文件
@@ -51,6 +119,26 @@ wx-uploader --verbose ./posts
 ```bash
 # 强制上传指定文件（忽略发布状态）
 wx-uploader ./2025/08/01-chat-with-ai.md
+
+# 使用多账号配置上传指定文件
+wx-uploader --config config.yaml --account work ./article.md
+```
+
+### 命令行选项
+
+```bash
+wx-uploader [选项] [路径]
+
+选项:
+    -c, --config <文件>        配置文件路径（YAML 或 JSON）
+    -a, --account <名称>       使用配置文件中的账号名称
+    -p, --provider <提供商>    AI 提供商：openai, gemini [默认: openai]
+        --ai-key <密钥>        AI API 密钥（覆盖配置/环境变量）
+    -v, --verbose              启用详细输出
+        --list-accounts        列出配置文件中的可用账号
+        --init-config <文件>   生成示例配置文件
+    -h, --help                 显示帮助信息
+    -V, --version              显示版本信息
 ```
 
 ## 工作原理
@@ -174,6 +262,46 @@ wx-uploader/
 - 工具在更新时会保留所有其他 frontmatter 字段
 - 封面图片保存在与 Markdown 文件相同的目录中
 - 支持 published 字段的字符串（`"true"`）和布尔值（`true`）格式
+- 配置文件支持 YAML（`.yaml`, `.yml`）和 JSON（`.json`）格式
+- 账号切换无缝，无需重启工具
+
+## 配置优先级
+
+工具按以下优先级顺序进行配置：
+
+1. **命令行标志**（最高优先级）：`--provider`、`--ai-key`、`--verbose`
+2. **配置文件**：来自 `--config` 文件的设置
+3. **环境变量**：`WECHAT_APP_ID`、`OPENAI_API_KEY` 等
+4. **默认值**（最低优先级）
+
+## 多账号工作流程
+
+### 设置工作流程
+```bash
+# 1. 生成配置模板
+wx-uploader --init-config my-accounts.yaml
+
+# 2. 编辑文件，填入您的实际凭证
+# 将占位符值替换为真实的 app_id、app_secret 和 API 密钥
+
+# 3. 列出配置的账号
+wx-uploader --config my-accounts.yaml --list-accounts
+
+# 4. 使用指定账号测试上传
+wx-uploader --config my-accounts.yaml --account personal ./test-article.md
+```
+
+### 日常使用工作流程
+```bash
+# 上传个人博客文章
+wx-uploader --config my-accounts.yaml --account personal ./blog/
+
+# 使用不同的 AI 提供商上传工作文章
+wx-uploader --config my-accounts.yaml --account work --provider gemini ./work-posts/
+
+# 使用默认账号快速上传
+wx-uploader --config my-accounts.yaml ./quick-post.md
+```
 
 ## 许可证
 

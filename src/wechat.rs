@@ -6,7 +6,7 @@
 use crate::error::{Error, Result};
 use crate::markdown::{parse_markdown_file, update_frontmatter, write_markdown_file};
 use crate::models::Frontmatter;
-use crate::openai::OpenAIClient;
+use crate::providers::{UniversalAIClient, CoverImageProcessor};
 use crate::output::{FORMATTER, FilePathFormatter, OutputFormatter};
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
@@ -22,9 +22,9 @@ pub trait WeChatUploader {
     async fn upload(&self, file_path: &str) -> Result<String>;
 }
 
-/// Trait for processing cover images
+/// Trait for processing cover images (local to wechat module)
 #[async_trait::async_trait]
-pub trait CoverImageProcessor {
+pub trait LocalCoverImageProcessor {
     /// Resolves and checks if a cover image exists
     async fn resolve_cover_path(
         &self,
@@ -53,17 +53,17 @@ impl WeChatUploader for WeChatClient {
 
 /// Default cover image processor implementation
 pub struct DefaultCoverImageProcessor<'a> {
-    openai_client: Option<&'a OpenAIClient>,
+    ai_client: Option<&'a UniversalAIClient>,
 }
 
 impl<'a> DefaultCoverImageProcessor<'a> {
-    pub fn new(openai_client: Option<&'a OpenAIClient>) -> Self {
-        Self { openai_client }
+    pub fn new(ai_client: Option<&'a UniversalAIClient>) -> Self {
+        Self { ai_client }
     }
 }
 
 #[async_trait::async_trait]
-impl CoverImageProcessor for DefaultCoverImageProcessor<'_> {
+impl LocalCoverImageProcessor for DefaultCoverImageProcessor<'_> {
     async fn resolve_cover_path(
         &self,
         markdown_path: &Path,
@@ -78,7 +78,7 @@ impl CoverImageProcessor for DefaultCoverImageProcessor<'_> {
         markdown_path: &Path,
         cover_filename: Option<&str>,
     ) -> Result<Option<String>> {
-        let Some(openai_client) = self.openai_client else {
+        let Some(ai_client) = self.ai_client else {
             return Ok(None);
         };
 
@@ -90,7 +90,7 @@ impl CoverImageProcessor for DefaultCoverImageProcessor<'_> {
                     .and_then(|s| s.to_str())
                     .unwrap_or("article");
 
-                match openai_client
+                match ai_client
                     .generate_cover_image(content, markdown_path, base_filename)
                     .await
                 {
@@ -110,7 +110,7 @@ impl CoverImageProcessor for DefaultCoverImageProcessor<'_> {
                     self.resolve_cover_path(markdown_path, filename).await;
 
                 if !exists {
-                    match openai_client
+                    match ai_client
                         .generate_cover_image_to_path(content, markdown_path, &target_cover_path)
                         .await
                     {
@@ -153,7 +153,7 @@ impl CoverImageProcessor for DefaultCoverImageProcessor<'_> {
 /// - Any file upload fails
 pub async fn process_directory(
     client: &WeChatClient,
-    openai_client: Option<&OpenAIClient>,
+    ai_client: Option<&UniversalAIClient>,
     dir: &Path,
     verbose: bool,
 ) -> Result<()> {
@@ -169,7 +169,7 @@ pub async fn process_directory(
     }
 
     for entry in entries {
-        upload_file(client, openai_client, entry.path(), false, verbose).await?;
+        upload_file(client, ai_client, entry.path(), false, verbose).await?;
     }
 
     Ok(())
@@ -193,7 +193,7 @@ pub async fn process_directory(
 /// Returns an error if any step of the upload process fails
 pub async fn upload_file(
     client: &WeChatClient,
-    openai_client: Option<&OpenAIClient>,
+    ai_client: Option<&UniversalAIClient>,
     path: &Path,
     force: bool,
     verbose: bool,
@@ -205,7 +205,7 @@ pub async fn upload_file(
     };
 
     // Handle cover image processing if needed
-    let cover_updated = process_cover_image(&mut frontmatter, path, openai_client, verbose).await?;
+    let cover_updated = process_cover_image(&mut frontmatter, path, ai_client, verbose).await?;
 
     // Save frontmatter if cover was updated
     if cover_updated {
@@ -258,16 +258,16 @@ async fn parse_and_check_file(
 async fn process_cover_image(
     frontmatter: &mut Frontmatter,
     path: &Path,
-    openai_client: Option<&OpenAIClient>,
+    ai_client: Option<&UniversalAIClient>,
     verbose: bool,
 ) -> Result<bool> {
-    let Some(openai_client) = openai_client else {
+    let Some(ai_client) = ai_client else {
         check_existing_cover(frontmatter, path, verbose);
         return Ok(false);
     };
 
     if verbose {
-        info!("OpenAI client available for cover generation");
+        info!("AI client available for cover generation");
     }
 
     let should_generate = should_generate_cover(frontmatter, path, verbose).await;
@@ -276,7 +276,7 @@ async fn process_cover_image(
         return Ok(false);
     }
 
-    let processor = DefaultCoverImageProcessor::new(Some(openai_client));
+    let processor = DefaultCoverImageProcessor::new(Some(ai_client));
 
     match processor
         .ensure_cover_image(&frontmatter.description, path, frontmatter.cover.as_deref())

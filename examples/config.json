@@ -1,0 +1,32 @@
+{
+  "accounts": {
+    "personal": {
+      "name": "personal",
+      "app_id": "your_personal_app_id_here",
+      "app_secret": "your_personal_app_secret_here",
+      "description": "Personal WeChat public account"
+    },
+    "work": {
+      "name": "work",
+      "app_id": "your_work_app_id_here",
+      "app_secret": "your_work_app_secret_here",
+      "description": "Work WeChat public account"
+    },
+    "blog": {
+      "name": "blog",
+      "app_id": "your_blog_app_id_here",
+      "app_secret": "your_blog_app_secret_here",
+      "description": "Technical blog WeChat account"
+    }
+  },
+  "default_account": "personal",
+  "ai_provider": {
+    "provider": "openai",
+    "api_key": "your_openai_api_key_here"
+  },
+  "settings": {
+    "verbose": false,
+    "default_theme": "lapis",
+    "default_code_highlighter": "github"
+  }
+}
